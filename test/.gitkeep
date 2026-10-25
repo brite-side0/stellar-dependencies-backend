@@ -1,3 +1,136 @@
+'use strict';
+
+/**
+ * Bounded in-memory TTL cache with LRU eviction.
+ *
+ * The cache is keyed by package name and stores arbitrary values. Entries
+ * expire after `ttlMs` milliseconds. When the number of entries exceeds
+ * `maxSize`, the least-recently-used entry is evicted.
+ *
+ * When `disabled` is true, `get` always misses and `set` is a no-op, which
+ * allows tests to bypass the cache entirely.
+ */
+
+/**
+ * @typedef {Object} NpmCacheOptions
+ * @property {number} [ttlMs] Time-to-live for entries in milliseconds.
+ * @property {number} [maxSize] Maximum number of entries to retain.
+ * @property {boolean} [disabled] When true, the cache is bypassed.
+ */
+
+/**
+ * @typedef {Object} NpmCache
+ * @property {(key: string) => *} get
+ * @property {(key: string, value: *) => void} set
+ * @property {(key: string) => boolean} has
+ * @property {(key: string) => void} delete
+ * @property {() => void} clear
+ * @property {number} size
+ */
+
+const DEFAULT_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const DEFAULT_MAX_SIZE = 500;
+
+/**
+ * Create a bounded TTL cache.
+ *
+ * @param {NpmCacheOptions} [options]
+ * @returns {NpmCache}
+ */
+function createNpmCache(options = {}) {
+  const {
+    ttlMs = DEFAULT_TTL_MS,
+    maxSize = DEFAULT_MAX_SIZE,
+    disabled = false,
+  } = options || {};
+
+  if (typeof ttlMs !== 'number' || Number.isNaN(ttlMs) || ttlMs < 0) {
+    throw new TypeError('ttlMs must be a non-negative number');
+  }
+  if (typeof maxSize !== 'number' || Number.isNaN(maxSize) || maxSize < 0) {
+    throw new TypeError('maxSize must be a non-negative number');
+  }
+
+  // Map preserves insertion order; we re-insert on access to maintain LRU order.
+  /** @type {Map<string, { value: *, expiresAt: number }>} */
+  const store = new Map();
+
+  function isExpired(entry) {
+    return entry.expiresAt <= Date.now();
+  }
+
+  function get(key) {
+    if (disabled) {
+      return undefined;
+    }
+    const entry = store.get(key);
+    if (entry === undefined) {
+      return undefined;
+    }
+    if (isExpired(entry)) {
+      store.delete(key);
+      return undefined;
+    }
+    // Refresh LRU position.
+    store.delete(key);
+    store.set(key, entry);
+    return entry.value;
+  }
+
+  function set(key, value) {
+    if (disabled) {
+      return;
+    }
+    if (maxSize === 0) {
+      return;
+    }
+    // Remove any existing entry so re-insertion updates LRU order.
+    store.delete(key);
+    store.set(key, { value, expiresAt: Date.now() + ttlMs });
+    // Evict least-recently-used entries until within bounds.
+    while (store.size > maxSize) {
+      const oldestKey = store.keys().next().value;
+      store.delete(oldestKey);
+    }
+  }
+
+  function has(key) {
+    if (disabled) {
+      return false;
+    }
+    const entry = store.get(key);
+    if (entry === undefined) {
+      return false;
+    }
+    if (isExpired(entry)) {
+      store.delete(key);
+      return false;
+    }
+    return true;
+  }
+
+  function del(key) {
+    store.delete(key);
+  }
+
+  function clear() {
+    store.clear();
+  }
+
+  return {
+    get,
+    set,
+    has,
+    delete: del,
+    clear,
+    get size() {
+      return disabled ? 0 : store.size;
+    },
+  };
+}
+
+module.exports = { createNpmCache, DEFAULT_TTL_MS, DEFAULT_MAX_SIZE };
+
 const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
