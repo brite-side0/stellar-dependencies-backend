@@ -1,141 +1,156 @@
 'use strict';
 
-/**
- * Bounded in-memory TTL cache with LRU eviction.
- *
- * The cache is keyed by package name and stores arbitrary values. Entries
- * expire after `ttlMs` milliseconds. When the number of entries exceeds
- * `maxSize`, the least-recently-used entry is evicted.
- *
- * When `disabled` is true, `get` always misses and `set` is a no-op, which
- * allows tests to bypass the cache entirely.
- */
-
-/**
- * @typedef {Object} NpmCacheOptions
- * @property {number} [ttlMs] Time-to-live for entries in milliseconds.
- * @property {number} [maxSize] Maximum number of entries to retain.
- * @property {boolean} [disabled] When true, the cache is bypassed.
- */
-
-/**
- * @typedef {Object} NpmCache
- * @property {(key: string) => *} get
- * @property {(key: string, value: *) => void} set
- * @property {(key: string) => boolean} has
- * @property {(key: string) => void} delete
- * @property {() => void} clear
- * @property {number} size
- */
-
-const DEFAULT_TTL_MS = 5 * 60 * 1000; // 5 minutes
-const DEFAULT_MAX_SIZE = 500;
-
-/**
- * Create a bounded TTL cache.
- *
- * @param {NpmCacheOptions} [options]
- * @returns {NpmCache}
- */
-function createNpmCache(options = {}) {
-  const {
-    ttlMs = DEFAULT_TTL_MS,
-    maxSize = DEFAULT_MAX_SIZE,
-    disabled = false,
-  } = options || {};
-
-  if (typeof ttlMs !== 'number' || Number.isNaN(ttlMs) || ttlMs < 0) {
-    throw new TypeError('ttlMs must be a non-negative number');
-  }
-  if (typeof maxSize !== 'number' || Number.isNaN(maxSize) || maxSize < 0) {
-    throw new TypeError('maxSize must be a non-negative number');
-  }
-
-  // Map preserves insertion order; we re-insert on access to maintain LRU order.
-  /** @type {Map<string, { value: *, expiresAt: number }>} */
-  const store = new Map();
-
-  function isExpired(entry) {
-    return entry.expiresAt <= Date.now();
-  }
-
-  function get(key) {
-    if (disabled) {
-      return undefined;
-    }
-    const entry = store.get(key);
-    if (entry === undefined) {
-      return undefined;
-    }
-    if (isExpired(entry)) {
-      store.delete(key);
-      return undefined;
-    }
-    // Refresh LRU position.
-    store.delete(key);
-    store.set(key, entry);
-    return entry.value;
-  }
-
-  function set(key, value) {
-    if (disabled) {
-      return;
-    }
-    if (maxSize === 0) {
-      return;
-    }
-    // Remove any existing entry so re-insertion updates LRU order.
-    store.delete(key);
-    store.set(key, { value, expiresAt: Date.now() + ttlMs });
-    // Evict least-recently-used entries until within bounds.
-    while (store.size > maxSize) {
-      const oldestKey = store.keys().next().value;
-      store.delete(oldestKey);
-    }
-  }
-
-  function has(key) {
-    if (disabled) {
-      return false;
-    }
-    const entry = store.get(key);
-    if (entry === undefined) {
-      return false;
-    }
-    if (isExpired(entry)) {
-      store.delete(key);
-      return false;
-    }
-    return true;
-  }
-
-  function del(key) {
-    store.delete(key);
-  }
-
-  function clear() {
-    store.clear();
-  }
-
-  return {
-    get,
-    set,
-    has,
-    delete: del,
-    clear,
-    get size() {
-      return disabled ? 0 : store.size;
-    },
-  };
-}
-
-module.exports = { createNpmCache, DEFAULT_TTL_MS, DEFAULT_MAX_SIZE };
-
-const { test } = require('node:test');
+const { test, before, after } = require('node:test');
 const assert = require('node:assert');
+const http = require('node:http');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
+
+const ALLOWED = 'https://ui.example.com,https://admin.example.com';
+
+let server;
+let baseUrl;
+
+function request(path, options = {}) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(path, baseUrl);
+    const req = http.request(
+      {
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname + url.search,
+        method: options.method || 'GET',
+        headers: options.headers || {},
+      },
+      (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => {
+          body += chunk;
+        });
+        res.on('end', () => {
+          resolve({ status: res.statusCode, headers: res.headers, body });
+        });
+      }
+    );
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+before(async () => {
+  process.env.ALLOWED_ORIGINS = ALLOWED;
+  const app = require('../src/app');
+  server = http.createServer(app);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  baseUrl = `http://127.0.0.1:${port}`;
+});
+
+after(async () => {
+  if (server) {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('allowed origin receives Access-Control-Allow-Origin on simple request', async () => {
+  const res = await request('/health', {
+    headers: { Origin: 'https://ui.example.com' },
+  });
+  assert.strictEqual(res.headers['access-control-allow-origin'], 'https://ui.example.com');
+});
+
+test('second allowed origin is also permitted', async () => {
+  const res = await request('/health', {
+    headers: { Origin: 'https://admin.example.com' },
+  });
+  assert.strictEqual(res.headers['access-control-allow-origin'], 'https://admin.example.com');
+});
+
+test('allowed origin preflight returns 204 with CORS headers', async () => {
+  const res = await request('/health', {
+    method: 'OPTIONS',
+    headers: {
+      Origin: 'https://ui.example.com',
+      'Access-Control-Request-Method': 'GET',
+      'Access-Control-Request-Headers': 'content-type',
+    },
+  });
+  assert.strictEqual(res.status, 204);
+  assert.strictEqual(res.headers['access-control-allow-origin'], 'https://ui.example.com');
+  assert.ok(res.headers['access-control-allow-methods']);
+  assert.ok(res.headers['access-control-allow-headers']);
+});
+
+test('disallowed origin receives no CORS headers', async () => {
+  const res = await request('/health', {
+    headers: { Origin: 'https://evil.example.com' },
+  });
+  assert.strictEqual(res.headers['access-control-allow-origin'], undefined);
+  assert.strictEqual(res.headers['access-control-allow-credentials'], undefined);
+});
+
+test('disallowed origin preflight receives no CORS headers', async () => {
+  const res = await request('/health', {
+    method: 'OPTIONS',
+    headers: {
+      Origin: 'https://evil.example.com',
+      'Access-Control-Request-Method': 'GET',
+    },
+  });
+  assert.strictEqual(res.headers['access-control-allow-origin'], undefined);
+});
+
+test('request with no Origin receives no CORS headers', async () => {
+  const res = await request('/health');
+  assert.strictEqual(res.headers['access-control-allow-origin'], undefined);
+});
+
+test('wildcard origin is never returned', async () => {
+  const origins = ['https://ui.example.com', 'https://evil.example.com', undefined];
+  for (const origin of origins) {
+    const headers = origin ? { Origin: origin } : {};
+    const res = await request('/health', { headers });
+    assert.notStrictEqual(res.headers['access-control-allow-origin'], '*');
+  }
+});
+
+test('API responses set X-Content-Type-Options: nosniff', async () => {
+  const res = await request('/health');
+  assert.strictEqual(res.headers['x-content-type-options'], 'nosniff');
+});
+
+test('API responses set a Referrer-Policy', async () => {
+  const res = await request('/health');
+  assert.ok(res.headers['referrer-policy']);
+  assert.strictEqual(res.headers['referrer-policy'], 'no-referrer');
+});
+
+test('API responses set Cache-Control: no-store', async () => {
+  const res = await request('/health');
+  assert.strictEqual(res.headers['cache-control'], 'no-store');
+});
+
+test('API responses do not include UI-specific CSP directives', async () => {
+  const res = await request('/health');
+  const csp = res.headers['content-security-policy'];
+  if (csp !== undefined) {
+    assert.ok(!/default-src/.test(csp), 'CSP should not contain default-src');
+    assert.ok(!/script-src/.test(csp), 'CSP should not contain script-src');
+    assert.ok(!/style-src/.test(csp), 'CSP should not contain style-src');
+    assert.ok(!/img-src/.test(csp), 'CSP should not contain img-src');
+    assert.ok(!/font-src/.test(csp), 'CSP should not contain font-src');
+    assert.ok(!/frame-ancestors/.test(csp), 'CSP should not contain frame-ancestors');
+  }
+});
+
+test('security headers are present on error responses too', async () => {
+  const res = await request('/definitely-not-a-route');
+  assert.strictEqual(res.headers['x-content-type-options'], 'nosniff');
+  assert.strictEqual(res.headers['referrer-policy'], 'no-referrer');
+  assert.strictEqual(res.headers['cache-control'], 'no-store');
+});
 
 // ---------------------------------------------------------------------------
 // Helpers
