@@ -13,5 +13,6 @@
     "test": "node --test test/*.test.js",
     "check": "node --check src/server.js && node --check src/scanner.js && node --check src/rate-limiter.js && node --check src/npm-cache.js && node --check src/lockfile.js && node --check src/transitive.js"
   },
+  "peerDependencies": {},
   "license": "MIT"
 }
