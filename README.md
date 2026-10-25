@@ -55,8 +55,10 @@ npm run check   # JavaScript syntax checks
 
 ## Included features
 
-- GitHub public repository validation and default-branch manifest retrieval.
+- GitHub public repository validation and manifest retrieval.
 - Optional relative manifest path, such as packages/web/package.json.
+- Optional `ref` parameter to scan a specific branch, tag or commit instead of the default branch.
+- Automatic workspace traversal: when the root `package.json` declares `workspaces`, their manifests are discovered and scanned too.
 - Direct runtime and optional dependencies; development dependencies opt in.
 - Six concurrent npm lookups, individual lookup failure reporting, request timeouts, response size limits.
 - Bounded in-memory npm registry cache with configurable TTL and size.
@@ -64,7 +66,40 @@ npm run check   # JavaScript syntax checks
 - Publisher-reported GitHub repository mapping, latest version, license, and npm maintainer usernames in the JSON report.
 - Optional installed-version resolution from the repository's `package-lock.json`; the report marks the installed version as `unknown` when no lockfile is found.
 - Opt-in transitive dependency scanning with configurable depth and total-package caps; packages are deduplicated and depth is recorded in the report.
+- Structured reason codes for unsupported dependency specifications.
+- Actionable errors when the GitHub API rate limit is hit.
 - Node HTTP server, automated tests, Dockerfile, MIT license, contribution and security guidance.
+- `GET /healthz` liveness endpoint: returns `200` with a small JSON body, makes no upstream calls and is exempt from rate limiting. Suitable for a Docker `HEALTHCHECK` or Kubernetes liveness/readiness probes; see `docs/DEPLOYMENT.md`.
+
+## Scanning a specific ref
+
+By default manifests are fetched from the repository's default branch. Pass an optional `ref` (branch, tag or commit SHA) to scan a different revision:
+
+```sh
+curl "http://localhost:3000/api/scan?repo=owner/name&ref=v1.2.0"
+```
+
+Refs are validated before any request is made: only letters, digits, `.`, `_`, `-` and `/` are allowed, and the length is capped. Refs that fail validation are rejected with a clear error. When `ref` is omitted, the default branch is used.
+
+## Workspace traversal
+
+If the scanned manifest is the root `package.json` and it declares `workspaces`, DependencyLens resolves those globs (array or `{ "packages": [...] }` form) and scans each matching `package.json` as well. Globs are resolved safely within the repository: paths that escape the repository root are ignored. The number of workspace manifests is capped, and dependencies are aggregated and deduplicated across all scanned manifests, so a package listed by several workspaces appears once in the report.
+
+## Unsupported dependency reason codes
+
+Dependency specifications that cannot be resolved to an npm package are reported as unsupported, each with a machine-readable `reason` code in the JSON report:
+
+| Code | Meaning |
+| --- | --- |
+| `npm_alias` | npm alias spec, e.g. `npm:other-package@^1.0.0` |
+| `workspace_link` | Workspace protocol link, e.g. `workspace:*` |
+| `local_path` | Local file or directory path, e.g. `file:../lib` |
+| `git_dependency` | Git URL or shorthand, e.g. `github:owner/repo` |
+| `unknown` | Any other specification that could not be classified |
+
+## GitHub rate limits
+
+Unauthenticated GitHub API requests hit rate limits quickly. When GitHub responds with `403` or `429` and rate-limit headers, DependencyLens returns an error that includes the reset time and reminds you to set `GITHUB_TOKEN`. Requests are not retried automatically, so a rate-limited scan fails fast instead of causing a retry storm. Set a server-side `GITHUB_TOKEN` (limited to public repository reads) to raise the limit.
 
 ## Project structure
 
@@ -74,7 +109,7 @@ npm run check   # JavaScript syntax checks
 
 ## What this version does not do
 
-It does not scan peer dependencies, traverse workspaces automatically, verify repository ownership, calculate funding need, check Drips claim status, create Drip Lists, connect wallets or send funds. npm aliases, workspace links, local paths and Git dependency specifications are marked unsupported. Unknown metadata stays unknown; no funding statistics are fabricated.
+It does not scan peer dependencies, verify repository ownership, calculate funding need, check Drips claim status, create Drip Lists, connect wallets or send funds. npm aliases, workspace links, local paths and Git dependency specifications are marked unsupported and carry a reason code (see above). Unknown metadata stays unknown; no funding statistics are fabricated.
 
 Installed versions are resolved from `package-lock.json` only when present; without a lockfile the report marks the installed version as `unknown`. Transitive dependency scanning is opt-in and bounded by depth and total-package caps.
 
