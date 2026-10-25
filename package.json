@@ -13,5 +13,6 @@
     "test": "node --test test/*.test.js",
     "check": "node --check src/server.js && node --check src/scanner.js && node --check src/config.js && node --check src/logger.js"
   },
+  "peerDependencies": {},
   "license": "MIT"
 }
