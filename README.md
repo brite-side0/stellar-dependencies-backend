@@ -57,6 +57,10 @@ Metadata comes from each package's **latest** npm release, which may differ from
 
 The app has no database, login, persisted reports or background jobs. Public deployment requires the controls described in `docs/DEPLOYMENT.md`.
 
+## Deploying the API
+
+The API runs as a standalone service; the web UI is hosted separately from its own repository. Operators deploying the API should follow `docs/DEPLOYMENT.md`, which covers Docker and standalone deployment, environment variables, CORS origins for the frontend, reverse-proxy settings, TLS and rate limits. The frontend repository's hosting notes describe how to point the UI at this API.
+
 ## Reference documentation
 
 - GitHub contents API: https://docs.github.com/en/rest/repos/contents
