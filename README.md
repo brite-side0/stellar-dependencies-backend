@@ -24,6 +24,14 @@ There are no third-party runtime dependencies, so no `npm install` is needed. Th
 
 Optional configuration: copy `.env.example` to `.env` (Windows PowerShell: `Copy-Item .env.example .env`; macOS/Linux: `cp .env.example .env`). A server-side `GITHUB_TOKEN` can increase API access capacity; use a token limited to public repository reads. Never commit it.
 
+Tunable limits (all validated at startup; the server exits with an error on invalid values):
+
+- `LOG_LEVEL`: minimum log level, one of `debug`, `info`, `warn`, `error` (default `info`).
+- `REQUEST_TIMEOUT_MS`: per-request timeout in milliseconds (default `10000`).
+- `MAX_RESPONSE_BYTES`: maximum accepted response size in bytes (default `5242880`).
+- `LOOKUP_CONCURRENCY`: number of concurrent npm lookups (default `6`).
+=======
+
 ```sh
 npm run dev     # Watch server files
 npm test        # Unit and HTTP integration tests
@@ -35,9 +43,10 @@ npm run check   # JavaScript syntax checks
 - GitHub public repository validation and default-branch manifest retrieval.
 - Optional relative manifest path, such as packages/web/package.json.
 - Direct runtime and optional dependencies; development dependencies opt in.
-- Six concurrent npm lookups, individual lookup failure reporting, request timeouts, response size limits.
+- Configurable concurrent npm lookups, individual lookup failure reporting, request timeouts and response size limits.
+- Structured JSON request logs (request id, method, path, status, duration) with tokens and `Authorization` headers redacted.
 - Publisher-reported GitHub repository mapping, latest version, license, and npm maintainer usernames in the JSON report.
-- Node HTTP server, automated tests, Dockerfile, MIT license, contribution and security guidance.
+- Node HTTP server, automated tests, Dockerfile, MIT license, contribution and security guidance. Report vulnerabilities through the private channel described in `SECURITY.md`.
 
 ## Project structure
 
