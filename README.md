@@ -38,6 +38,7 @@ npm run check   # JavaScript syntax checks
 - Six concurrent npm lookups, individual lookup failure reporting, request timeouts, response size limits.
 - Publisher-reported GitHub repository mapping, latest version, license, and npm maintainer usernames in the JSON report.
 - Node HTTP server, automated tests, Dockerfile, MIT license, contribution and security guidance.
+- `GET /healthz` liveness endpoint: returns `200` with a small JSON body, makes no upstream calls and is exempt from rate limiting. Suitable for a Docker `HEALTHCHECK` or Kubernetes liveness/readiness probes; see `docs/DEPLOYMENT.md`.
 
 ## Project structure
 
