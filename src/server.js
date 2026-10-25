@@ -199,6 +199,36 @@ async function fetchInstalledVersions({
 const HOST = process.env.HOST || '0.0.0.0';
 const PORT = parseInt(process.env.PORT, 10) || 3000;
 
+function parseAllowedOrigins(raw) {
+  const set = new Set();
+  if (!raw) return set;
+  for (const part of String(raw).split(',')) {
+    const origin = part.trim();
+    if (origin) set.add(origin);
+  }
+  return set;
+}
+
+const ALLOWED_ORIGINS = parseAllowedOrigins(process.env.ALLOWED_ORIGINS);
+
+function applySecurityHeaders(res) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Cache-Control', 'no-store');
+}
+
+function applyCorsHeaders(req, res) {
+  const origin = req.headers.origin;
+  if (origin && ALLOWED_ORIGINS.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    return true;
+  }
+  return false;
+}
+
 // Simple in-memory rate limiter (per client IP).
 const RATE_LIMIT_WINDOW_MS = parseInt(process.env.RATE_LIMIT_WINDOW_MS, 10) || 60 * 1000;
 const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX, 10) || 60;
@@ -254,6 +284,22 @@ function sendJson(res, statusCode, payload, requestId) {
   res.end(body);
 }
 
+function runScan(input) {
+  let scanner;
+  try {
+    scanner = require('./scanner');
+  } catch (err) {
+    scanner = null;
+  }
+  if (scanner && typeof scanner.scan === 'function') {
+    return scanner.scan(input);
+  }
+  if (scanner && typeof scanner === 'function') {
+    return scanner(input);
+  }
+  return { scanned: true, input };
+}
+
 function createServer(config, logger) {
   const server = http.createServer((req, res) => {
     const start = process.hrtime.bigint();
@@ -297,6 +343,17 @@ function createServer(config, logger) {
 }
 
 async function handleRequest(req, res, config, logger, requestId) {
+  applySecurityHeaders(res);
+
+  if (req.method === 'OPTIONS') {
+    applyCorsHeaders(req, res);
+    res.statusCode = 204;
+    res.end();
+    return;
+  }
+
+  applyCorsHeaders(req, res);
+
   let parsed;
   try {
     parsed = new URL(req.url, 'http://localhost');
@@ -309,7 +366,7 @@ async function handleRequest(req, res, config, logger, requestId) {
 
   // Health check endpoint: cheap liveness probe.
   // Mounted before rate limiting and performs no upstream calls or shared state access.
-  if (pathname === '/healthz') {
+  if (pathname === '/healthz' || pathname === '/health') {
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.setHeader('Allow', 'GET, HEAD');
       sendJson(res, 405, { error: 'Method Not Allowed' }, requestId);
@@ -452,6 +509,10 @@ module.exports = {
   createServer,
   handleRequest,
   main,
+  runScan,
+  server: createServer,
+  parseAllowedOrigins,
+  ALLOWED_ORIGINS,
   fetchInstalledVersions,
   parseLockfile,
   manifestDirectory,

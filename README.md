@@ -1,5 +1,7 @@
 # DependencyLens Backend
 
+![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)
+
 HTTP API and GitHub/npm scanner for DependencyLens: see the open-source projects behind a JavaScript application and prepare a funding shortlist.
 
 Version 0.2.0. Independent of Drips; no affiliation or funding guarantee.
@@ -21,6 +23,8 @@ npm start
 ```
 
 There are no third-party runtime dependencies, so no `npm install` is needed. The server reads `HOST` and `PORT` (see `.env.example`).
+
+Cross-origin access is disabled by default. To let the web UI call the API from another origin, set `ALLOWED_ORIGINS` to a comma-separated list of exact origins, for example `ALLOWED_ORIGINS=https://app.example.com,http://localhost:5173`. Only listed origins receive CORS headers; a wildcard is never sent.
 
 Optional configuration: copy `.env.example` to `.env` (Windows PowerShell: `Copy-Item .env.example .env`; macOS/Linux: `cp .env.example .env`). A server-side `GITHUB_TOKEN` can increase API access capacity; use a token limited to public repository reads. Never commit it.
 
